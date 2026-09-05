@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>בדיקת מחיר ללקוח</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      direction: rtl;
+      background-color: #f4f7f6;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 25px;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    h2 {
+      text-align: center;
+      color: #0056b3;
+      margin-top: 0;
+    }
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: bold;
+    }
+    /* 16px חובה כדי למנוע Auto-Zoom באייפון */
+    input, textarea, select {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      background-color: white;
+    }
+    textarea {
+      resize: vertical;
+      height: 100px;
+    }
+    button {
+      background-color: #0056b3;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      font-size: 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+      font-weight: bold;
+    }
+    button:hover {
+      background-color: #003d82;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .error {
+      color: #d9534f;
+      background-color: #f9dede;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 15px;
+      text-align: center;
+    }
+    .hidden {
+      display: none;
+    }
+    .user-info {
+      background: #eef2f5;
+      padding: 10px 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: center;
+    }
+    th {
+      background-color: #0056b3;
+      color: white;
+    }
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+    .not-found {
+      color: #d9534f;
+      font-weight: bold;
+    }
+    .found {
+      color: #28a745;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>בדיקת מחיר ללקוח</h2>
+
+    <!-- מסך התחברות -->
+    <div id="loginSection">
+      <div id="loginError" class="error hidden"></div>
+      <div class="form-group">
+        <label for="username">שם משתמש:</label>
+        <input type="text" id="username" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="password">סיסמה:</label>
+        <input type="password" id="password" autocomplete="current-password">
+      </div>
+      <button id="loginBtn" onclick="handleLogin()">התחבר</button>
+    </div>
+
+    <!-- מסך חיפוש (מוסתר בהתחלה) -->
+    <div id="searchSection" class="hidden">
+      <div class="user-info">
+        <span id="welcomeText"></span>
+        <button onclick="handleLogout()" style="width: auto; padding: 5px 10px; font-size: 14px; background-color: #6c757d;">התנתק</button>
+      </div>
+
+      <div id="searchError" class="error hidden"></div>
+
+      <div class="form-group">
+        <label for="monthSelect">מחירון (חודש):</label>
+        <select id="monthSelect"></select>
+      </div>
+
+      <div class="form-group">
+        <label for="customersInput">מספרי לקוח (ניתן להזין מספר אחד או כמה מופרדים בפסיקים/שורה):</label>
+        <textarea id="customersInput" placeholder="לדוגמה: 3974, 3977"></textarea>
+      </div>
+      <button id="searchBtn" onclick="handleSearch()">חפש מחירים</button>
+
+      <div id="resultsContainer"></div>
+    </div>
+  </div>
+
+  <script>
+    // כתובת ה-Web App של Apps Script (הפרויקט הנפרד)
+    const EXEC_URL = 'https://script.google.com/macros/s/AKfycbzHMfSbh07xW4GMQofb_EbpT2oU9wmF4riaOZCUjUAcAuVWGO4_c0ek6Hm4YGYoER70/exec';
+
+    // שליחת בקשה ל-Apps Script דרך GET (עוקף CORS, בניגוד ל-POST)
+    async function callApi(params) {
+      const url = new URL(EXEC_URL);
+      Object.keys(params).forEach(function (key) {
+        if (params[key] !== undefined && params[key] !== null) {
+          url.searchParams.set(key, params[key]);
+        }
+      });
+      const res = await fetch(url.toString());
+      if (!res.ok) {
+        throw new Error('HTTP ' + res.status);
+      }
+      return res.json();
+    }
+
+    window.onload = function() {
+      const savedUser = sessionStorage.getItem('username');
+      const savedPass = sessionStorage.getItem('password');
+      if (savedUser && savedPass) {
+        document.getElementById('username').value = savedUser;
+        document.getElementById('password').value = savedPass;
+        handleLogin();
+      }
+    };
+
+    async function loadMonths() {
+      const select = document.getElementById('monthSelect');
+      select.innerHTML = '<option>טוען...</option>';
+      try {
+        const response = await callApi({ action: 'months' });
+        select.innerHTML = '';
+        if (response.ok && response.months && response.months.length > 0) {
+          response.months.forEach(function (name) {
+            const opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            select.appendChild(opt);
+          });
+        } else {
+          select.innerHTML = '<option value="מחירים">מחירים</option>';
+        }
+      } catch (err) {
+        select.innerHTML = '<option value="מחירים">מחירים</option>';
+      }
+    }
+
+    async function handleLogin() {
+      const user = document.getElementById('username').value.trim();
+      const pass = document.getElementById('password').value;
+      const errorDiv = document.getElementById('loginError');
+      const btn = document.getElementById('loginBtn');
+
+      if (!user || !pass) {
+        errorDiv.innerText = 'יש להזין שם משתמש וסיסמה.';
+        errorDiv.classList.remove('hidden');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerText = 'מתחבר...';
+
+      try {
+        const response = await callApi({ action: 'login', username: user, password: pass });
+
+        if (response.ok) {
+          sessionStorage.setItem('username', user);
+          sessionStorage.setItem('password', pass);
+
+          document.getElementById('loginSection').classList.add('hidden');
+          document.getElementById('searchSection').classList.remove('hidden');
+          document.getElementById('welcomeText').innerText =
+            'שלום, ' + response.name + ' (' + (response.access === 'הכל' ? 'מנהל / הכל' : 'משווק') + ')';
+          errorDiv.classList.add('hidden');
+
+          await loadMonths();
+        } else {
+          errorDiv.innerText = response.message;
+          errorDiv.classList.remove('hidden');
+        }
+      } catch (err) {
+        errorDiv.innerText = 'שגיאת תקשורת מול השרת.';
+        errorDiv.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'התחבר';
+      }
+    }
+
+    function handleLogout() {
+      sessionStorage.clear();
+      document.getElementById('username').value = '';
+      document.getElementById('password').value = '';
+      document.getElementById('customersInput').value = '';
+      document.getElementById('monthSelect').innerHTML = '';
+      document.getElementById('searchSection').classList.add('hidden');
+      document.getElementById('loginSection').classList.remove('hidden');
+      document.getElementById('resultsContainer').innerHTML = '';
+    }
+
+    async function handleSearch() {
+      const user = sessionStorage.getItem('username');
+      const pass = sessionStorage.getItem('password');
+      const rawInput = document.getElementById('customersInput').value;
+      const selectedSheet = document.getElementById('monthSelect').value;
+      const errorDiv = document.getElementById('searchError');
+      const btn = document.getElementById('searchBtn');
+
+      const customerNumbers = rawInput.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0);
+
+      if (customerNumbers.length === 0) {
+        errorDiv.innerText = 'יש להזין לפחות מספר לקוח אחד.';
+        errorDiv.classList.remove('hidden');
+        return;
+      }
+
+      errorDiv.classList.add('hidden');
+      btn.disabled = true;
+      btn.innerText = 'מחפש...';
+
+      try {
+        const response = await callApi({
+          action: 'lookup',
+          username: user,
+          password: pass,
+          customers: customerNumbers.join(','),
+          sheet: selectedSheet
+        });
+
+        if (!response.ok) {
+          errorDiv.innerText = response.message;
+          errorDiv.classList.remove('hidden');
+          return;
+        }
+        renderResults(response.results);
+      } catch (err) {
+        errorDiv.innerText = 'שגיאה בביצוע החיפוש.';
+        errorDiv.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = 'חפש מחירים';
+      }
+    }
+
+    function renderResults(results) {
+      const container = document.getElementById('resultsContainer');
+      if (!results || results.length === 0) {
+        container.innerHTML = '<p>לא נמצאו תוצאות.</p>';
+        return;
+      }
+
+      let html = `
+        <table>
+          <thead>
+            <tr>
+              <th>מספר לקוח</th>
+              <th>סטטוס</th>
+              <th>מחיר חוץ</th>
+              <th>מחיר דלקנים</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+
+      results.forEach(item => {
+        const statusClass = item.found ? 'found' : 'not-found';
+        const statusText = item.found ? 'נמצא' : 'לא נמצא';
+        html += `
+          <tr>
+            <td><strong>${item.customer}</strong></td>
+            <td class="${statusClass}">${statusText}</td>
+            <td>${item.outsidePrice || '-'}</td>
+            <td>${item.fuelPrice || '-'}</td>
+          </tr>
+        `;
+      });
+
+      html += `</tbody></table>`;
+      container.innerHTML = html;
+    }
+  </script>
+</body>
+</html>
